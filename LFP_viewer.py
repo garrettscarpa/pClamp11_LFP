@@ -540,4 +540,5 @@ export_button.on_clicked(export_csv)
 fig.canvas.mpl_connect('button_press_event', on_click)  # <-- IMPORTANT!
 # initial draw
 display_stim(current_index)
+fig.subplots_adjust(bottom=0.15)  # increase bottom space (default ~0.1)
 plt.show()
