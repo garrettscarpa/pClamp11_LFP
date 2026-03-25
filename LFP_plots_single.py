@@ -8,10 +8,10 @@ import pyabf
 ## NOTE: Errorbars are currently set within-subject. will need to be adapted for across-subject eventually
 
 # ================= User Settings =================
-root = "/Users/gs075/Desktop/Data/LFP/HF_RSP_Plexxikon/LFP_input"
-recording = "2025_12_05_0076"
+root = "/Users/garrett/Desktop/analysis/lfp/V1/LFP_input"
+recording = "2026_02_19_0091_LFP"
 abf_path = os.path.join(root, recording + ".abf")
-csv_path = os.path.join("/Users/gs075/Desktop/Data/LFP/HF_RSP_Plexxikon/LFP_output", f"LFP_results_{recording}.csv")
+csv_path = os.path.join("/Users/garrett/Desktop/analysis/lfp/V1/LFP_output", f"LFP_results_{recording}.csv")
 apply_highpass_filter = True
 highpass_cutoff = 1.0  # Hz
 highpass_order = 2

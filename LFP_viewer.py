@@ -9,22 +9,24 @@ import pyabf
 # -------------------- User settings --------------------
 fPSP_direction = 'min'        # 'min' or 'max'
 apply_highpass_filter = True
-highpass_cutoff, highpass_order = 1.0, 2
-root = '/Users/gs075/Desktop/Data/LFP/HF_V1_Tumor/LFP_input'
-recording = '2026_02_19_0046_AMS_LFP'
-output_path = '/Users/gs075/Desktop'
+highpass_cutoff, highpass_order = 1, 1
+root = '/Users/garrett/Desktop/analysis/lfp/V1/LFP_input'
+recording = '2026_02_25_0017_LFP'
+output_path = '/Users/garrett/Desktop/analysis/lfp/V1/LFP_output'
 abf_path = os.path.join(root, recording + ".abf")
 csv_path = os.path.join(output_path, f"LFP_results_{recording}.csv")
-delay_after_stim_s = 0.0008
+delay_after_stim_s = 0.002
 fPSP_min_deflection = 0.05
 min_valid_amplitude, max_valid_amplitude = fPSP_min_deflection, 0.4
-zoom_window, fPSP_window = 0.02, 0.01
+zoom_window, fPSP_window = 0.03, 0.015
 artifact_search_window_ms = 1.0
 stim_start, stim_interval, n_stimulations = 8.969, 10.0, 50
 y_ax_lim = -1.5, .6
 amplitudes = np.linspace(50, 500, 10)
 n_repeats = int(np.ceil(n_stimulations / len(amplitudes)))
 currents = np.tile(amplitudes, n_repeats)[:n_stimulations]
+interp_tolerance = 1e-3  # mV threshold for "off-signal"
+
 
 # -------------------- Load ABF --------------------
 abf = pyabf.ABF(abf_path)
@@ -166,6 +168,15 @@ def update_peak_from_bases(idx):
     p_idx = i1 + local_idx
     fPSP_peaks[idx] = (abf.sweepX[p_idx], abf_filtered[p_idx])
 
+def update_interp_button():
+    global interp_active
+    if bases_off_signal(current_index):
+        interp_button.label.set_color('black')  # active
+        interp_active = True
+    else:
+        interp_button.label.set_color('gray')   # inactive
+        interp_active = False
+
 def display_stim(idx):
     peak_time, peak_val = fPSP_peaks[idx]
     b1_t, b1_v, b2_t, b2_v = baseline_times[idx]
@@ -184,8 +195,12 @@ def display_stim(idx):
     f_start, f_end = stim_time + delay_after_stim_s, stim_time + delay_after_stim_s + fPSP_window
     axs[0].axvspan(f_start, f_end, color='steelblue', alpha=0.2)
     if not np.isnan(peak_val): axs[0].plot(peak_time, peak_val, 'go', ms=6)
-    axs[0].plot(b1_t, b1_v, 'ko', ms=6, color = 'orange'); axs[0].plot(b2_t, b2_v, 'o', color='orangered', ms=6)
-
+    if snap_bases:
+        axs[0].plot(b1_t, b1_v, 'o', ms=8, color='red')
+        axs[0].plot(b2_t, b2_v, 'o', ms=8, color='red')
+    else:
+        axs[0].plot(b1_t, b1_v, 'o', ms=6, color='blue')
+        axs[0].plot(b2_t, b2_v, 'o', ms=6, color='violet')
     # onset/offset fits (best-effort)
     try:
         i_base1 = int(b1_t * fs); i_peak = int(peak_time * fs)
@@ -212,7 +227,87 @@ def display_stim(idx):
     t_wave, y_wave = generate_biphasic_pulse(currents[idx])
     axs[1].plot(t_wave, y_wave, color = 'maroon'); axs[1].set_xlabel("Time (ms)"); axs[1].set_ylabel("Current (pA)")
     axs[1].set_title(f"Stimulation Waveform - {int(currents[idx])} pA"); axs[1].set_xlim(-0.5, 0.5); axs[1].set_ylim(-600, 600)
+    update_interp_button()
     fig.canvas.draw_idle()
+    
+
+def local_base_warp(i_center, target_y, window_ms=0.9):
+    """
+    Smoothly warp the signal locally so it passes through (i_center, target_y)
+    while preserving surrounding shape.
+    """
+    global abf_filtered
+
+    half_window = int((window_ms / 1000.0) * fs)
+    i_start = max(0, i_center - half_window)
+    i_end   = min(L, i_center + half_window)
+
+    x = np.arange(i_start, i_end)
+
+    # Current signal
+    y = abf_filtered[i_start:i_end]
+
+    # Difference needed at center
+    delta = target_y - abf_filtered[i_center]
+
+    # Gaussian weighting (peaks at center, fades outward)
+    sigma = half_window / 2
+    weights = np.exp(-0.5 * ((x - i_center) / sigma) ** 2)
+
+    # Normalize so center weight = 1
+    weights /= weights.max()
+
+    # Apply smooth correction
+    y_new = y + delta * weights
+
+    abf_filtered[i_start:i_end] = y_new    
+
+
+def interpolate_between_bases(event):
+    global fv_history
+
+    if not interp_active:
+        print("Interpolation not available")
+        return
+
+    fv_history.append(abf_filtered.copy())
+
+    b1_t, b1_v, b2_t, b2_v = baseline_times[current_index]
+
+    i1 = int(b1_t * fs)
+    i2 = int(b2_t * fs)
+
+    # Check which base(s) are off
+    y1_actual = abf_filtered[i1]
+    y2_actual = abf_filtered[i2]
+
+    if abs(y1_actual - b1_v) > interp_tolerance:
+        local_base_warp(i1, b1_v)
+
+    if abs(y2_actual - b2_v) > interp_tolerance:
+        local_base_warp(i2, b2_v)
+
+    print("Local interpolation applied to off-signal base(s)")
+
+    update_peak_from_bases(current_index)
+    display_stim(current_index)
+
+def bases_off_signal(idx):
+    b1_t, b1_v, b2_t, b2_v = baseline_times[idx]
+    if b1_t is None or b2_t is None:
+        return False
+
+    i1 = int(b1_t * fs)
+    i2 = int(b2_t * fs)
+
+    if i1 < 0 or i1 >= L or i2 < 0 or i2 >= L:
+        return False
+
+    y1_actual = abf_filtered[i1]
+    y2_actual = abf_filtered[i2]
+
+    return (abs(y1_actual - b1_v) > interp_tolerance or
+            abs(y2_actual - b2_v) > interp_tolerance)
 
 # keyboard navigation
 def on_key(event):
@@ -232,16 +327,26 @@ def on_press(event):
     elif d2 < 0.001: dragging_base = 'base2'
 
 # -------------------- Snap toggle --------------------
-snap_bases = False  # default: snapping disabled
+snap_bases = True  # default: snapping disabled
 
 def toggle_snap(event):
     global snap_bases
-    snap_bases = not snap_bases
-    print(f"Snap bases {'disabled' if snap_bases else 'enabled'}")
 
-snap_ax = plt.axes([0.48, 0.01, 0.15, 0.05])
-snap_button = Button(snap_ax, 'Toggle Snap')
-snap_button.on_clicked(toggle_snap)
+    snap_bases = not snap_bases
+
+    # Update label text
+    snap_button.label.set_text(f"Snap: {'OFF' if snap_bases else 'ON'}")
+    # Update color (visual feedback)
+    if snap_bases:
+        snap_button.color = 'lightred'
+        snap_button.hovercolor = 'red'
+    else:
+        snap_button.color = 'lightgray'
+        snap_button.hovercolor = 'gray'
+
+    print(f"Snap bases {'enabled' if snap_bases else 'disabled'}")
+
+    fig.canvas.draw_idle()
 
 # -------------------- Update on_motion --------------------
 def on_motion(event):
@@ -303,15 +408,9 @@ def reset_bases(event):
     # update peak and redraw
     update_peak_from_bases(current_index)
     display_stim(current_index)
-
     
-# Add the button to the figure
-reset_ax = plt.axes([0.65, 0.01, 0.12, 0.05])  # [left, bottom, width, height]
-reset_button = Button(reset_ax, 'Reset Bases')
-reset_button.on_clicked(reset_bases)
-fig.canvas.mpl_connect('button_press_event', on_press)
-fig.canvas.mpl_connect('motion_notify_event', on_motion)
-fig.canvas.mpl_connect('button_release_event', on_release)
+
+
 # export CSV button
 def export_csv(event):
     rows = []
@@ -362,7 +461,6 @@ def toggle_fv_removal(event):
 # --- FV removal variables ---
 fv_removal_active = False
 fv_start, fv_end = None, None
-fv_history = [abf_filtered.copy()]
 
 # --- FV removal click handler ---
 def on_click(event):
@@ -395,28 +493,51 @@ def on_click(event):
 # --- Undo button ---
 def undo_fv_removal(event):
     global abf_filtered, fv_history
-    if len(fv_history) > 0:
-        abf_filtered[:] = fv_history.pop()
-        print("FV removal undone")
+
+    if len(fv_history) > 1:
+        fv_history.pop()  # remove current state
+        abf_filtered[:] = fv_history[-1]  # restore previous
+        print("Undo successful")
         display_stim(current_index)
+    else:
+        print("Nothing to undo")
+
+interp_ax = plt.axes([0.4, 0.01, 0.12, 0.05])
+interp_button = Button(interp_ax, 'Interpolate')
+interp_button.label.set_color('gray')  # start "inactive"
+interp_active = False
+
+# Add the button to the figure
+reset_ax = plt.axes([0.7, 0.01, 0.12, 0.05])  # [left, bottom, width, height]
+reset_button = Button(reset_ax, 'Reset Bases')
+reset_button.on_clicked(reset_bases)
+fig.canvas.mpl_connect('button_press_event', on_press)
+fig.canvas.mpl_connect('motion_notify_event', on_motion)
+fig.canvas.mpl_connect('button_release_event', on_release)
 
 # --- Connect buttons and canvas ---
 fv_ax = plt.axes([0.01, 0.01, 0.18, 0.05])
 fv_button = Button(fv_ax, 'Toggle FV Removal')
 fv_button.on_clicked(lambda e: toggle_fv_removal(e))
+interp_button.on_clicked(interpolate_between_bases)
 
-undo_ax = plt.axes([0.2, 0.01, 0.12, 0.05])
-undo_button = Button(undo_ax, 'Undo FV Removal')
+snap_ax = plt.axes([0.22, 0.01, 0.15, 0.05])
+snap_button = Button(snap_ax, 'Snap: OFF')
+snap_button.on_clicked(toggle_snap)
+snap_button.color = 'lightgray'
+snap_button.hovercolor = 'gray'
+
+
+undo_ax = plt.axes([0.55, 0.01, 0.12, 0.05])
+undo_button = Button(undo_ax, 'Undo')
 undo_button.on_clicked(undo_fv_removal)
 
-fig.canvas.mpl_connect('button_press_event', on_click)  # <-- IMPORTANT!
 
-
-export_ax = plt.axes([0.8, 0.01, 0.15, 0.05])
+export_ax = plt.axes([0.85, 0.01, 0.12, 0.05])
 export_button = Button(export_ax, 'Export CSV')
 export_button.on_clicked(export_csv)
 
-
+fig.canvas.mpl_connect('button_press_event', on_click)  # <-- IMPORTANT!
 # initial draw
 display_stim(current_index)
 plt.show()
