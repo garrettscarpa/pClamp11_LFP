@@ -26,6 +26,7 @@ amplitudes = np.linspace(50, 500, 10)
 n_repeats = int(np.ceil(n_stimulations / len(amplitudes)))
 currents = np.tile(amplitudes, n_repeats)[:n_stimulations]
 interp_tolerance = 1e-3  # mV threshold for "off-signal"
+snap_bases = True  # default: snapping disabled
 
 
 # -------------------- Load ABF --------------------
@@ -79,6 +80,8 @@ def update_all_peaks():
         local_idx = np.argmin(seg) if fPSP_direction == 'min' else np.argmax(seg)
         peak_idx = i1 + local_idx
         fPSP_peaks[idx] = (abf.sweepX[peak_idx], abf_filtered[peak_idx])
+        
+
 # -------------------- Detect fPSPs & baselines --------------------
 for idx, stim_time in enumerate(stim_times):
     stim_idx = int(stim_time * fs)
@@ -119,6 +122,9 @@ for idx, stim_time in enumerate(stim_times):
 for b in baseline_times:
     while len(b) < 4: b.append(None)
 update_all_peaks()
+
+
+
 
 # -------------------- Biphasic pulse generator --------------------
 def generate_biphasic_pulse(amplitude_pA, duration_us=100, fs_wave=1e6, window_ms=1):
@@ -196,11 +202,11 @@ def display_stim(idx):
     axs[0].axvspan(f_start, f_end, color='steelblue', alpha=0.2)
     if not np.isnan(peak_val): axs[0].plot(peak_time, peak_val, 'go', ms=6)
     if snap_bases:
-        axs[0].plot(b1_t, b1_v, 'o', ms=8, color='red')
-        axs[0].plot(b2_t, b2_v, 'o', ms=8, color='red')
-    else:
         axs[0].plot(b1_t, b1_v, 'o', ms=6, color='blue')
         axs[0].plot(b2_t, b2_v, 'o', ms=6, color='violet')
+    else:
+        axs[0].plot(b1_t, b1_v, 'o', ms=8, color='red')
+        axs[0].plot(b2_t, b2_v, 'o', ms=8, color='red')
     # onset/offset fits (best-effort)
     try:
         i_base1 = int(b1_t * fs); i_peak = int(peak_time * fs)
@@ -327,22 +333,17 @@ def on_press(event):
     elif d2 < 0.001: dragging_base = 'base2'
 
 # -------------------- Snap toggle --------------------
-snap_bases = True  # default: snapping disabled
 
 def toggle_snap(event):
     global snap_bases
-
     snap_bases = not snap_bases
-
     # Update label text
-    snap_button.label.set_text(f"Snap: {'OFF' if snap_bases else 'ON'}")
+    snap_button.label.set_text(f"Snap: {'ON' if snap_bases else 'OFF'}")
     # Update color (visual feedback)
     if snap_bases:
-        snap_button.color = 'lightred'
-        snap_button.hovercolor = 'red'
+        snap_button.color = 'lightgreen'
     else:
-        snap_button.color = 'lightgray'
-        snap_button.hovercolor = 'gray'
+        snap_button.color = 'salmon'
 
     print(f"Snap bases {'enabled' if snap_bases else 'disabled'}")
 
@@ -363,13 +364,13 @@ def on_motion(event):
 
     if dragging_base == 'base1':
         baseline_times[current_index][0] = event.xdata
-        if snap_bases and b2_y is not None:
+        if not snap_bases and b2_y is not None:
             baseline_times[current_index][1] = b2_y  # snap base1 y to base2 y
         else:
             baseline_times[current_index][1] = abf_filtered[xi]
     elif dragging_base == 'base2':
         baseline_times[current_index][2] = event.xdata
-        if snap_bases and b1_y is not None:
+        if not snap_bases and b1_y is not None:
             baseline_times[current_index][3] = b1_y  # snap base2 y to base1 y
         else:
             baseline_times[current_index][3] = abf_filtered[xi]
@@ -522,7 +523,7 @@ fv_button.on_clicked(lambda e: toggle_fv_removal(e))
 interp_button.on_clicked(interpolate_between_bases)
 
 snap_ax = plt.axes([0.22, 0.01, 0.15, 0.05])
-snap_button = Button(snap_ax, 'Snap: OFF')
+snap_button = Button(snap_ax, 'Snap: ON')
 snap_button.on_clicked(toggle_snap)
 snap_button.color = 'lightgray'
 snap_button.hovercolor = 'gray'
