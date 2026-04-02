@@ -5,30 +5,30 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
 from scipy.signal import butter, filtfilt
 import pyabf
+import time
 
 # -------------------- User settings --------------------
 fPSP_direction = 'min'        # 'min' or 'max'
 apply_highpass_filter = True
 highpass_cutoff, highpass_order = 1, 1
-root = '/Users/garrett/Desktop/analysis/lfp/V1/LFP_input'
-recording = '2026_02_25_0017_LFP'
-output_path = '/Users/garrett/Desktop/analysis/lfp/V1/LFP_output'
+root = '/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_input'
+recording = '2025_10_30_0004'
+output_path = '/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_output'
 abf_path = os.path.join(root, recording + ".abf")
 csv_path = os.path.join(output_path, f"LFP_results_{recording}.csv")
-delay_after_stim_s = 0.002
+delay_after_stim_s = 0.001
 fPSP_min_deflection = 0.05
 min_valid_amplitude, max_valid_amplitude = fPSP_min_deflection, 0.4
-zoom_window, fPSP_window = 0.03, 0.015
+zoom_window, fPSP_window = 0.04, 0.010
 artifact_search_window_ms = 1.0
 stim_start, stim_interval, n_stimulations = 8.969, 10.0, 50
-y_ax_lim = -1.5, .6
+y_ax_lim = -0.9, .3
 amplitudes = np.linspace(50, 500, 10)
 n_repeats = int(np.ceil(n_stimulations / len(amplitudes)))
 currents = np.tile(amplitudes, n_repeats)[:n_stimulations]
 interp_tolerance = 1e-3  # mV threshold for "off-signal"
 snap_bases = True  # default: snapping disabled
-
-
+undo_stack = []
 # -------------------- Load ABF --------------------
 abf = pyabf.ABF(abf_path)
 abf.setSweep(0, channel=0)
@@ -224,7 +224,14 @@ def display_stim(idx):
         ia = max(0, min(int(b1_t * fs), L - 1)); ib = max(0, min(int(b2_t * fs), L - 1))
         ia, ib = min(ia, ib), max(ia, ib)
         x_reg = abf.sweepX[ia:ib + 1]; y_reg = abf_filtered[ia:ib + 1]
-        axs[0].fill_between(x_reg, y_reg, b1_v, alpha=0.5, color = 'firebrick')
+        # create slanted baseline between the two bases
+        baseline_line = np.linspace(b1_v, b2_v, len(x_reg))
+        
+        # fill between signal and slanted baseline
+        axs[0].fill_between(x_reg, y_reg, baseline_line, alpha=0.5, color='firebrick')
+        
+        # (optional) draw the baseline line for clarity
+        axs[0].plot(x_reg, baseline_line, '--', color='black', lw=1)
     except Exception:
         pass
 
@@ -247,7 +254,7 @@ def local_base_warp(i_center, target_y, window_ms=0.9):
     half_window = int((window_ms / 1000.0) * fs)
     i_start = max(0, i_center - half_window)
     i_end   = min(L, i_center + half_window)
-
+    push_undo_action(i_start, i_end)
     x = np.arange(i_start, i_end)
 
     # Current signal
@@ -270,14 +277,9 @@ def local_base_warp(i_center, target_y, window_ms=0.9):
 
 
 def interpolate_between_bases(event):
-    global fv_history
-
     if not interp_active:
         print("Interpolation not available")
         return
-
-    fv_history.append(abf_filtered.copy())
-
     b1_t, b1_v, b2_t, b2_v = baseline_times[current_index]
 
     i1 = int(b1_t * fs)
@@ -383,9 +385,6 @@ def on_release(event):
     global dragging_base
     dragging_base = None
 
-fig.canvas.mpl_connect('button_press_event', on_press)
-fig.canvas.mpl_connect('motion_notify_event', on_motion)
-fig.canvas.mpl_connect('button_release_event', on_release)
 
 # reset bases button — place both bases inside the blue shading and set their Vm to 0 mV
 def reset_bases(event):
@@ -418,6 +417,16 @@ def export_csv(event):
     for i in range(len(stim_times)):
         b1_t, b1_v, b2_t, b2_v = baseline_times[i]
         p_t, p_v = fPSP_peaks[i]
+        # --- Compute baseline at peak (slanted baseline) ---
+        if (
+            b1_t is not None and b2_t is not None and
+            not np.isnan(p_t) and not np.isnan(p_v) and
+            b2_t != b1_t
+        ):
+            baseline_at_peak = b1_v + (b2_v - b1_v) * ((p_t - b1_t) / (b2_t - b1_t))
+            amplitude = p_v - baseline_at_peak
+        else:
+            amplitude = np.nan
         try:
             i_b1, i_p = int(b1_t * fs), int(p_t * fs)
             onset_slope = np.polyfit(abf.sweepX[i_b1:i_p], abf_filtered[i_b1:i_p], 1)[0]
@@ -430,19 +439,39 @@ def export_csv(event):
             offset_slope = np.nan
         try:
             i1, i2 = sorted([int(b1_t * fs), int(b2_t * fs)])
-            area = np.trapz(abf_filtered[i1:i2] - b1_v, abf.sweepX[i1:i2]) * 1e3
+            
+            x = abf.sweepX[i1:i2]
+            y = abf_filtered[i1:i2]
+            
+            # slanted baseline
+            baseline_line = np.linspace(b1_v, b2_v, len(x))
+            
+            # AUC relative to slanted baseline
+            area = np.trapz(y - baseline_line, x) * 1e3
+
         except Exception:
             area = np.nan
-        rows.append([i + 1, b1_t, b1_v, b2_t, b2_v, p_t, p_v, onset_slope, offset_slope, area, int(currents[i])])
-    # Save FV-modified trace
+        rows.append([
+            i + 1,
+            b1_t, b1_v,
+            b2_t, b2_v,
+            p_t, p_v,
+            amplitude,   # <-- NEW
+            onset_slope,
+            offset_slope,
+            area,
+            int(currents[i])
+        ])    # Save FV-modified trace
     fv_save_path = os.path.join(output_path, f"{recording}_FV_removed.npy")
     np.save(fv_save_path, abf_filtered)
     print(f"FV-modified trace saved: {fv_save_path}")
-    
+        
     df = pd.DataFrame(rows, columns=[
-        'Stim #', 'Baseline1 Time (s)', 'Baseline1 Vm (mV)',
+        'Stim #',
+        'Baseline1 Time (s)', 'Baseline1 Vm (mV)',
         'Baseline2 Time (s)', 'Baseline2 Vm (mV)',
         'Peak Time (s)', 'Peak Vm (mV)',
+        'Amplitude (mV)',   # <-- NEW COLUMN
         'Onset Slope (mV/s)', 'Offset Slope (mV/s)',
         'Area (mV·ms)', 'Current (pA)'
     ])
@@ -451,9 +480,6 @@ def export_csv(event):
     print(f"CSV exported: {os.path.basename(csv_path)}")
     display_stim(current_index)
     
-
-fv_history = [abf_filtered.copy()]
-
 def toggle_fv_removal(event):
     global fv_removal_active
     fv_removal_active = not fv_removal_active
@@ -465,21 +491,26 @@ fv_start, fv_end = None, None
 
 # --- FV removal click handler ---
 def on_click(event):
-    global fv_start, fv_end, abf_filtered, fv_history
-    if not fv_removal_active or event.inaxes != axs[0]:
+    global fv_start, fv_end, abf_filtered
+
+    # Only respond to LEFT mouse button inside trace axis
+    if event.button != 1 or event.inaxes != axs[0] or not fv_removal_active:
         return
+
     if fv_start is None:
         fv_start = event.xdata
         print(f"FV start set at {fv_start*1000:.2f} ms")
     elif fv_end is None:
         fv_end = event.xdata
         print(f"FV end set at {fv_end*1000:.2f} ms")
-        # Save current trace for undo
-        fv_history.append(abf_filtered.copy())
-        # Interpolate over FV region
+    
         i_start = max(0, int(fv_start * fs))
         i_end = max(0, int(fv_end * fs))
-        if i_end <= i_start: i_end = i_start + 1
+        if i_end <= i_start:
+            i_end = i_start + 1
+    
+        push_undo_action(i_start, i_end)
+    
         y = abf_filtered.copy()
         y[i_start:i_end] = np.interp(
             np.arange(i_start, i_end),
@@ -487,21 +518,34 @@ def on_click(event):
             [y[i_start-1], y[i_end] if i_end < len(y) else y[-1]]
         )
         abf_filtered[:] = y
+    
         print("Fiber volley removed and interpolated")
         fv_start, fv_end = None, None
         display_stim(current_index)
 
-# --- Undo button ---
-def undo_fv_removal(event):
-    global abf_filtered, fv_history
 
-    if len(fv_history) > 1:
-        fv_history.pop()  # remove current state
-        abf_filtered[:] = fv_history[-1]  # restore previous
-        print("Undo successful")
-        display_stim(current_index)
-    else:
+def push_undo_action(start, end):
+    undo_stack.append((
+        start,
+        end,
+        abf_filtered[start:end].copy()
+    ))
+    
+# --- Undo button ---
+last_undo_time = 0
+
+def undo_fv_removal(event):
+    global abf_filtered
+
+    if not undo_stack:
         print("Nothing to undo")
+        return
+
+    start, end, old_values = undo_stack.pop()
+
+    abf_filtered[start:end] = old_values
+    update_peak_from_bases(current_index)
+    display_stim(current_index)
 
 interp_ax = plt.axes([0.4, 0.01, 0.12, 0.05])
 interp_button = Button(interp_ax, 'Interpolate')
@@ -512,9 +556,7 @@ interp_active = False
 reset_ax = plt.axes([0.7, 0.01, 0.12, 0.05])  # [left, bottom, width, height]
 reset_button = Button(reset_ax, 'Reset Bases')
 reset_button.on_clicked(reset_bases)
-fig.canvas.mpl_connect('button_press_event', on_press)
-fig.canvas.mpl_connect('motion_notify_event', on_motion)
-fig.canvas.mpl_connect('button_release_event', on_release)
+
 
 # --- Connect buttons and canvas ---
 fv_ax = plt.axes([0.01, 0.01, 0.18, 0.05])
@@ -538,7 +580,11 @@ export_ax = plt.axes([0.85, 0.01, 0.12, 0.05])
 export_button = Button(export_ax, 'Export CSV')
 export_button.on_clicked(export_csv)
 
-fig.canvas.mpl_connect('button_press_event', on_click)  # <-- IMPORTANT!
+fig.canvas.mpl_connect('button_press_event', on_press)
+fig.canvas.mpl_connect('motion_notify_event', on_motion)
+fig.canvas.mpl_connect('button_release_event', on_release)
+fig.canvas.mpl_connect('button_press_event', on_click)
+
 # initial draw
 display_stim(current_index)
 fig.subplots_adjust(bottom=0.15)  # increase bottom space (default ~0.1)

@@ -8,15 +8,16 @@ import pyabf
 ## NOTE: Errorbars are currently set within-subject. will need to be adapted for across-subject eventually
 
 # ================= User Settings =================
-root = "/Users/garrett/Desktop/analysis/lfp/V1/LFP_input"
-recording = "2026_02_19_0091_LFP"
-abf_path = os.path.join(root, recording + ".abf")
-csv_path = os.path.join("/Users/garrett/Desktop/analysis/lfp/V1/LFP_output", f"LFP_results_{recording}.csv")
+root = "/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_input"
+output_path = '/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_output'
+recording = "2025_10_24_0016"
 apply_highpass_filter = True
 highpass_cutoff = 1.0  # Hz
 highpass_order = 2
 
 # ================= Load CSV =================
+abf_path = os.path.join(root, recording + ".abf")
+csv_path = os.path.join(output_path, f"LFP_results_{recording}.csv")
 df = pd.read_csv(csv_path)
 
 def highpass_filter(sig, fs, cutoff=1.0, order=2):
@@ -67,7 +68,6 @@ plt.tight_layout()
 plt.show()
 
 # ================= Load ABF File (FV-removed if available) =================
-output_path = "/Users/gs075/Desktop/LFP/Hannah_Farnsworth_RSP/LFP_output"
 fv_removed_path = os.path.join(output_path, f"{recording}_FV_removed.npy")
 
 abf = pyabf.ABF(abf_path)
@@ -98,18 +98,31 @@ for current in unique_currents:
     aligned_traces = []
     trace_times = []
 
+    if os.path.exists(fv_removed_path):
+        # Load previously FV-removed trace (with all user adjustments)
+        abf_filtered = np.load(fv_removed_path)
+        print(f"Loaded FV-removed trace: {fv_removed_path}")
+    else:
+        # Load original ABF trace
+        trace = abf.sweepY.copy()
+        if apply_highpass_filter:
+            abf_filtered = highpass_filter(trace, fs, highpass_cutoff, highpass_order)
+        else:
+            abf_filtered = trace.copy()
+        print(f"Loaded original ABF trace: {abf_path}")
+    
+    # ================= Extract segments using FV-adjusted trace =================
     for idx, row in subset.iterrows():
-        base1_idx = int(row['Baseline1 Time (s)'] * fs)
-        base2_idx = int(row['Baseline2 Time (s)'] * fs)
-        if base2_idx <= base1_idx:
-            base2_idx = min(base1_idx+1, len(abf_filtered)-1)
-
-        seg = abf_filtered[base1_idx:base2_idx+1]
-        
-        
-        # Baseline alignment: subtract Baseline1 Vm
-        seg = seg - row['Baseline1 Vm (mV)']
-
+        # Make sure to round and clip indices
+        base1_idx = int(round(row['Baseline1 Time (s)'] * fs))
+        base2_idx = int(round(row['Baseline2 Time (s)'] * fs))
+        base1_idx = np.clip(base1_idx, 0, len(abf_filtered)-1)
+        base2_idx = np.clip(base2_idx, base1_idx+1, len(abf_filtered)-1)
+    
+        # Use the exact baseline value from the FV-modified trace
+        baseline_val = abf_filtered[base1_idx]  
+        seg = abf_filtered[base1_idx:base2_idx+1] - baseline_val
+            
         aligned_traces.append(seg)
         trace_times.append(np.arange(len(seg)) / fs * 1000)  # convert to ms
 

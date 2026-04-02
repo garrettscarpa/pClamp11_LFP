@@ -6,13 +6,13 @@ from scipy.signal import butter, filtfilt
 import pyabf
 
 # ================= User Settings =================
-root_input = "/Users/gs075/Desktop/Data/LFP/HF_RSP_Plexxikon/LFP_input"
-root_output = "/Users/gs075/Desktop/Data/LFP/HF_RSP_Plexxikon/LFP_output"
-unblinding_path = "/Users/gs075/Desktop/Data/LFP/HF_RSP_Plexxikon/HF_LFP_UNBLINDING.csv"
+root_input = "/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_input"
+root_output = "/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_output"
+unblinding_path = "/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/HF_LFP_UNBLINDING.csv"
 apply_highpass_filter = True
 highpass_cutoff = 1.0  # Hz
 highpass_order = 2
-window_ms = 3.0  # ← Signal analyzed after left base
+window_ms = 7.0  # ← Signal analyzed after left base
 
 # -------------------- Helper functions --------------------
 def highpass_filter(signal, fs, cutoff=1.0, order=2):
@@ -35,8 +35,8 @@ def get_condition_from_date(recording_name):
     return match['CONDITION'].iloc[0]
 
 # ===================== Storage =====================
-recording_traces = {}       # {current: [list of avg traces per recording]}
-recording_times = {}        # {current: [list of time vectors per recording]}
+recording_traces = {}       # {current: {recording_name: avg_trace}}
+recording_times = {}        # {current: {recording_name: avg_time}}
 recording_conditions = {}   # {recording_name: condition}
 all_recording_metrics = []  # overall metrics per recording
 conditioned_metrics = {cond: [] for cond in all_conditions}
@@ -56,7 +56,6 @@ for csv_file in csv_files:
         continue
 
     df = pd.read_csv(csv_path)
-    df['Amplitude (mV)'] = abs(df['Peak Vm (mV)'] - df['Baseline1 Vm (mV)'])
     df['Area (mV·ms)'] = abs(df['Area (mV·ms)'])
 
     # ---- Load filtered ABF trace ----
@@ -109,8 +108,8 @@ for csv_file in csv_files:
                 base2_idx = min(base1_idx + 1, len(abf_filtered)-1)
 
             seg = abf_filtered[base1_idx:base2_idx+1]
-            seg = seg - row['Baseline1 Vm (mV)']  # baseline alignment
-
+            baseline_val = abf_filtered[base1_idx]
+            seg = seg - baseline_val
             aligned_traces.append(seg)
             trace_times.append(np.arange(len(seg)) / fs * 1000)  # ms
 
@@ -127,8 +126,8 @@ for csv_file in csv_files:
         avg_trace = np.nanmean(padded_traces, axis=0)  # within recording
         avg_time = np.nanmean(padded_times, axis=0)
 
-        recording_traces.setdefault(current, []).append(avg_trace)
-        recording_times.setdefault(current, []).append(avg_time)
+        recording_traces.setdefault(current, {})[recording_name] = avg_trace
+        recording_times.setdefault(current, {})[recording_name] = avg_time
 
     recording_conditions[recording_name] = condition
 
@@ -248,13 +247,15 @@ for ax, cond in zip(axs, conditions):
         traces_cond = []
         times_cond = []
 
-        # 🔑 THIS LOOP MUST BE INSIDE THE CURRENT LOOP
-        for idx, (rec_name, rec_cond) in enumerate(recording_conditions.items()):
+        for rec_name, rec_cond in recording_conditions.items():
             if rec_cond != cond:
                 continue
-
-            traces_cond.append(recording_traces[current][idx])
-            times_cond.append(recording_times[current][idx])
+        
+            if rec_name not in recording_traces.get(current, {}):
+                continue
+        
+            traces_cond.append(recording_traces[current][rec_name])
+            times_cond.append(recording_times[current][rec_name])
 
         if len(traces_cond) == 0:
             continue
@@ -293,10 +294,74 @@ for ax, cond in zip(axs, conditions):
     ax.set_title(f"{cond} (n={condition_n.get(cond,0)}, N={condition_N.get(cond,0)})")
     ax.set_xlabel("Time after fPSP onset (ms)")
     ax.set_ylabel("Vm (Baseline-Aligned)")
-    ax.set_xlim(0, 3)
-    ax.set_ylim(-0.5, 0)
+    ax.set_xlim(0, window_ms)
+    ax.set_ylim(-.5, 0)
     ax.legend(title="Current (pA)")
     ax.grid(True)
 
 plt.tight_layout()
 plt.show()
+
+
+
+# ===================== Figure 3: Max Amplitude Scatter =====================
+condition_colors = {
+    'Control': 'dimgrey',
+    'Tumor': 'tomato'
+}
+
+# ---- Build scatter data (max amplitude per recording) ----
+scatter_data = []
+
+for df_metrics in all_recording_metrics:
+    if df_metrics.empty:
+        continue
+
+    condition = df_metrics['Condition'].iloc[0]
+    max_amp = df_metrics['Amplitude (mV)'].max()
+
+    scatter_data.append({
+        'Condition': condition,
+        'Max Amplitude (mV)': max_amp
+    })
+
+scatter_df = pd.DataFrame(scatter_data)
+
+# ---- Safety check ----
+if scatter_df.empty:
+    print("⚠️ No scatter data available. Skipping Figure 3.")
+else:
+    plt.figure(figsize=(10, 6))
+
+    conditions = sorted(scatter_df['Condition'].unique())
+    x_map = {cond: i for i, cond in enumerate(conditions)}
+
+    for cond in conditions:
+        subset = scatter_df[scatter_df['Condition'] == cond]
+
+        x = np.full(len(subset), x_map[cond])
+        jitter = np.random.uniform(-0.08, 0.08, size=len(subset))
+
+        color = condition_colors.get(cond, 'black')
+
+        plt.scatter(
+            x + jitter,
+            subset['Max Amplitude (mV)'],
+            color=color,
+            alpha=0.8,
+            label=cond
+        )
+
+    # ---- Formatting ----
+    plt.xticks(list(x_map.values()), list(x_map.keys()))
+    plt.ylabel("Max Amplitude (mV)")
+    plt.title("Max LFP Amplitude per Recording")
+    plt.grid(True)
+
+    # Remove duplicate legend entries
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys())
+
+    plt.tight_layout()
+    plt.show()
