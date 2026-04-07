@@ -6,9 +6,9 @@ from scipy.signal import butter, filtfilt
 import pyabf
 
 # ================= User Settings =================
-root_input = "/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_input"
-root_output = "/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_output"
-unblinding_path = "/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/HF_LFP_UNBLINDING.csv"
+root_input = "/Users/gs075/Desktop/Data/LFP/HF_RSP_Tumor_1stCohort_Reanalysis/LFP_input"
+root_output = "/Users/gs075/Desktop/Data/LFP/HF_RSP_Tumor_1stCohort_Reanalysis/LFP_output"
+unblinding_path = "/Users/gs075/Desktop/Data/LFP/HF_RSP_Tumor_1stCohort_Reanalysis/HF_LFP_UNBLINDING.csv"
 apply_highpass_filter = True
 highpass_cutoff = 1.0  # Hz
 highpass_order = 2

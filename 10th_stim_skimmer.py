@@ -5,7 +5,8 @@ from scipy.signal import butter, filtfilt
 import pyabf
 
 # ================= User Settings =================
-root = '/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_input'
+root = '/Users/gs075/Desktop/Data/LFP/HF_RSP_Tumor_1stCohort_Reanalysis/LFP_input'
+output_root = root.replace("LFP_input", "LFP_output")
 stim_index_to_show = 9   # 10th stim (0-based index)
 
 apply_highpass_filter = True
@@ -61,6 +62,17 @@ def compute_peak(signal, fs, stim_time):
     peak_idx = search_start + local_idx
     return peak_idx, signal[peak_idx]
 
+def find_output_npy(fname):
+    # extract core ID from ABF filename
+    # assumes something like: 2025_10_23_0009.abf
+    base = os.path.splitext(fname)[0]
+
+    for f in os.listdir(output_root):
+        if f.endswith("_FV_removed.npy") and base in f:
+            return os.path.join(output_root, f)
+
+    return None
+
 # ================= Load ABF files =================
 abf_files = sorted([f for f in os.listdir(root) if f.endswith('.abf')])
 
@@ -73,7 +85,14 @@ for fname in abf_files:
 
     fs = abf.dataRate
     signal = abf.sweepY.copy()
-
+    edited_signal = None
+    npy_path = find_output_npy(fname)
+    
+    if npy_path is not None:
+        try:
+            edited_signal = np.load(npy_path)
+        except:
+            edited_signal = None
     if apply_highpass_filter:
         signal = highpass_filter(signal, fs, highpass_cutoff, highpass_order)
 
@@ -97,10 +116,13 @@ for fname in abf_files:
         "name": fname,
         "x": x,
         "y": y,
+        "edited_signal": edited_signal,
         "stim_time": stim_time,
         "peak_idx": peak_idx,
         "peak_val": peak_val
     })
+    
+    
 
 # ================= Plot + Navigation =================
 fig, ax = plt.subplots(figsize=(10, 6))
@@ -111,7 +133,19 @@ def plot_record(idx):
 
     rec = records[idx]
 
-    ax.plot(rec["x"], rec["y"], lw=1)
+    # Raw / filtered signal
+    ax.plot(rec["x"], rec["y"], lw=1, color="dimgrey", label="Raw")
+
+    # Edited signal (if exists)
+    if rec["edited_signal"] is not None:
+        i0 = max(0, int((rec["stim_time"] - zoom_window / 2) * fs))
+        i1 = min(len(rec["edited_signal"]), int((rec["stim_time"] + zoom_window / 2) * fs))
+
+        y_edit = rec["edited_signal"][i0:i1]
+        x_edit = rec["x"][:len(y_edit)]  # align lengths safely
+
+        ax.plot(x_edit, y_edit, lw=1, color='k', linestyle='--', label="Edited")
+
     ax.axhline(0, linestyle='--')
 
     # stim line
@@ -121,17 +155,16 @@ def plot_record(idx):
     if not np.isnan(rec["peak_val"]):
         ax.plot(abf.sweepX[rec["peak_idx"]], rec["peak_val"], 'go')
 
-    # ---- SET AXIS LIMITS ----
-    ax.set_ylim(-1.5, 0.5)  # y-axis: -1.5 to +0.5 mV
+    ax.set_ylim(-1, 0.5)
 
-    # center the 30 ms window around stim
-    window = 0.030  # 30 ms in seconds
+    window = 0.030
     ax.set_xlim(rec["stim_time"] - window/2, rec["stim_time"] + window/2)
 
     ax.set_title(f"{rec['name']} | Stim 10")
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Vm (mV)")
 
+    ax.legend()
     fig.canvas.draw_idle()
 
 def on_key(event):

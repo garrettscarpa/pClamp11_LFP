@@ -11,9 +11,9 @@ import time
 fPSP_direction = 'min'        # 'min' or 'max'
 apply_highpass_filter = True
 highpass_cutoff, highpass_order = 1, 1
-root = '/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_input'
-recording = '2025_10_30_0004'
-output_path = '/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_output'
+root = '/Users/gs075/Desktop/Data/LFP/HF_RSP_Tumor_1stCohort_Reanalysis/LFP_input'
+recording = '2025_10_31_0017'
+output_path = '/Users/gs075/Desktop/Data/LFP/HF_RSP_Tumor_1stCohort_Reanalysis/LFP_output'
 abf_path = os.path.join(root, recording + ".abf")
 csv_path = os.path.join(output_path, f"LFP_results_{recording}.csv")
 delay_after_stim_s = 0.001
@@ -40,14 +40,17 @@ def highpass_filter(sig, fs, cutoff=1.0, order=2):
     b, a = butter(order, cutoff / nyq, btype='high')
     return filtfilt(b, a, sig)
 
-abf_filtered = highpass_filter(abf.sweepY, fs, highpass_cutoff, highpass_order) if apply_highpass_filter else abf.sweepY.copy()
+# Original filtered signal (ALWAYS preserved)
+abf_original = highpass_filter(abf.sweepY, fs, highpass_cutoff, highpass_order) if apply_highpass_filter else abf.sweepY.copy()
 
+# Working signal (may be FV removed)
 fv_save_path = os.path.join(output_path, f"{recording}_FV_removed.npy")
+
 if os.path.exists(fv_save_path):
     abf_filtered = np.load(fv_save_path)
     print("Loaded FV-removed trace")
 else:
-    abf_filtered = highpass_filter(abf.sweepY, fs, highpass_cutoff, highpass_order) if apply_highpass_filter else abf.sweepY.copy()
+    abf_filtered = abf_original.copy()
 
 # -------------------- Stim / artifact detection --------------------
 artifact_search_window = artifact_search_window_ms / 1000.0
@@ -194,7 +197,16 @@ def display_stim(idx):
     i1 = min(L, int((stim_time + zoom_window / 2) * fs))
     x_full = abf.sweepX[i0:i1]; y_full = abf_filtered[i0:i1]
 
-    axs[0].cla(); axs[0].plot(x_full, y_full, lw=1, color = 'dimgrey'); axs[0].axhline(0, ls='--', color='k')
+    axs[0].cla()
+    
+    # --- Original signal (background) ---
+    y_orig = abf_original[i0:i1]
+    axs[0].plot(x_full, y_orig, lw=1, color='dimgrey', label='Raw')
+    
+    # --- FV-removed / working signal (foreground) ---
+    axs[0].plot(x_full, y_full, lw=1.5, color='black', label='Edited')
+    
+    axs[0].axhline(0, ls='--', color='k')
     axs[0].set_ylabel('Vm (mV)'); axs[0].set_ylim(y_ax_lim)
     axs[0].set_title(f"High-Pass Filtered Vm - Stim {idx+1}/{len(stim_times)}")
     axs[0].axvline(stim_time, color='red', ls='--', lw=1)
@@ -234,8 +246,9 @@ def display_stim(idx):
         axs[0].plot(x_reg, baseline_line, '--', color='black', lw=1)
     except Exception:
         pass
-
+    
     # bottom: stimulation waveform
+    axs[0].legend(loc='upper left')
     axs[1].cla()
     t_wave, y_wave = generate_biphasic_pulse(currents[idx])
     axs[1].plot(t_wave, y_wave, color = 'maroon'); axs[1].set_xlabel("Time (ms)"); axs[1].set_ylabel("Current (pA)")

@@ -8,9 +8,9 @@ import pyabf
 ## NOTE: Errorbars are currently set within-subject. will need to be adapted for across-subject eventually
 
 # ================= User Settings =================
-root = "/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_input"
-output_path = '/Users/garrett/Desktop/analysis/lfp/HF_RSP_Tumor_1stCohort_Reanalysis copy/LFP_output'
-recording = "2025_10_24_0016"
+root = "/Users/gs075/Desktop/Data/LFP/HF_RSP_Tumor_1stCohort_Reanalysis/LFP_input"
+output_path = '/Users/gs075/Desktop/Data/LFP/HF_RSP_Tumor_1stCohort_Reanalysis/LFP_output'
+recording = "2025_10_31_0005"
 apply_highpass_filter = True
 highpass_cutoff = 1.0  # Hz
 highpass_order = 2
